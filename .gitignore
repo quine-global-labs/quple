@@ -1,0 +1,14 @@
+# Vendored upstream source, kept as its own git clone rather than tracked here.
+/jitsi-meet/
+
+# Rust
+/desktop/src-tauri/target/
+/desktop/src-tauri/gen/
+
+# Go
+/server/quple-server
+/server/quple-server-test
+/server/*.test
+
+# Misc
+.DS_Store

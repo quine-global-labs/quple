@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Quple</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <!-- Setup screen: shown until a username has been saved. -->
+    <section id="setup" class="screen" hidden>
+      <div class="card">
+        <h1>Welcome to Quple</h1>
+        <p class="muted">
+          Pick a username. Anyone who knows it can call you.
+        </p>
+        <form id="setup-form">
+          <label for="setup-username">Username</label>
+          <input
+            id="setup-username"
+            name="username"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="e.g. peterson"
+            required
+          />
+
+          <details id="setup-advanced">
+            <summary>Advanced settings</summary>
+            <label for="setup-server">Signaling server URL</label>
+            <input id="setup-server" name="serverUrl" autocomplete="off" spellcheck="false" />
+
+            <label for="setup-jitsi">Jitsi Meet server URL</label>
+            <input id="setup-jitsi" name="jitsiBase" autocomplete="off" spellcheck="false" />
+          </details>
+
+          <button type="submit">Get started</button>
+        </form>
+      </div>
+    </section>
+
+    <!-- Dashboard: shown once a username is set. -->
+    <section id="dashboard" class="screen" hidden>
+      <header>
+        <div>
+          <div class="me-label">You</div>
+          <div id="me-username" class="me-username"></div>
+        </div>
+        <button id="settings-btn" class="icon-btn" title="Settings" type="button">⚙</button>
+      </header>
+
+      <div class="card">
+        <label for="call-target">Call someone</label>
+        <form id="call-form">
+          <input
+            id="call-target"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="their username"
+            required
+          />
+          <button type="submit">Call</button>
+        </form>
+      </div>
+
+      <div class="card">
+        <div class="list-header">
+          <span>Online now</span>
+          <span id="status-dot" class="status-dot" title="Connecting…"></span>
+        </div>
+        <ul id="user-list" class="user-list">
+          <li class="empty" id="user-list-empty">No one else is online right now.</li>
+        </ul>
+      </div>
+
+      <p id="status-text" class="muted status-text"></p>
+    </section>
+
+    <!-- Settings screen: reachable from the dashboard gear icon. -->
+    <section id="settings" class="screen" hidden>
+      <div class="card">
+        <h1>Settings</h1>
+        <form id="settings-form">
+          <label for="settings-username">Username</label>
+          <input id="settings-username" name="username" autocomplete="off" spellcheck="false" required />
+
+          <label for="settings-server">Signaling server URL</label>
+          <input id="settings-server" name="serverUrl" autocomplete="off" spellcheck="false" />
+
+          <label for="settings-jitsi">Jitsi Meet server URL</label>
+          <input id="settings-jitsi" name="jitsiBase" autocomplete="off" spellcheck="false" />
+
+          <div class="button-row">
+            <button type="button" id="settings-cancel" class="secondary">Cancel</button>
+            <button type="submit">Save</button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <!-- Incoming call overlay -->
+    <div id="incoming-call" class="overlay" hidden>
+      <div class="card call-card">
+        <div class="ringing">Incoming call</div>
+        <div id="incoming-from" class="incoming-from"></div>
+        <div class="button-row">
+          <button type="button" id="decline-call" class="secondary">Decline</button>
+          <button type="button" id="accept-call">Accept</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="main.js"></script>
+  </body>
+</html>
