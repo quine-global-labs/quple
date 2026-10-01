@@ -273,3 +273,7 @@ header {
 #accept-call {
   background: var(--success);
 }
+
+[hidden] {
+  display: none !important;
+}

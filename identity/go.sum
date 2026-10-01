@@ -1,0 +1,6 @@
+github.com/markbates/goth v1.82.0 h1:8j/c34AjBSTNzO7zTsOyP5IYCQCMBTRBHAbBt/PI0bQ=
+github.com/markbates/goth v1.82.0/go.mod h1:/DRlcq0pyqkKToyZjsL2KgiA1zbF1HIjE7u2uC79rUk=
+github.com/zitadel/oidc/v3 v3.51.8 h1:HwMhPhwiafSfs7/WkSodvMWXbyNasEPdDHc6UAUoi0A=
+github.com/zitadel/oidc/v3 v3.51.8/go.mod h1:KkOaz5CH55jxheuCStNb5vyVIV0/qMUL65AYL9nNiGM=
+golang.org/x/oauth2 v0.36.0 h1:peZ/1z27fi9hUOFCAZaHyrpWG5lwe0RJEEEeH0ThlIs=
+golang.org/x/oauth2 v0.36.0/go.mod h1:YDBUJMTkDnJS+A4BP4eZBjCqtokkg1hODuPjwiGPO7Q=

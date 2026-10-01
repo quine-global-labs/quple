@@ -1,5 +1,6 @@
 (() => {
   const { invoke } = window.__TAURI__.core;
+  const { listen } = window.__TAURI__.event;
 
   const DEFAULT_SERVER_URL = "https://meet.quineglobal.com";
   const DEFAULT_JITSI_BASE = "https://meet.jit.si";
@@ -128,11 +129,52 @@
         method: "POST",
         body: JSON.stringify({ from: config.username, to: target }),
       });
-      await invoke("open_meeting", { jitsiBase: config.jitsiBase, room: meetingId });
+      await invoke("open_meeting", {
+        jitsiBase: config.jitsiBase,
+        room: meetingId,
+        displayName: config.username,
+      });
     } catch (err) {
       setStatus(`Couldn't call ${target}: ${err.message}`, "offline");
     }
   }
+
+  // ---- meet.jit.si sign-in --------------------------------------------------
+
+  // meet.jit.si only starts a meeting once a signed-in user joins it. Sign in
+  // once here; every meeting window then reuses that session.
+  let jitsiSignedIn = false;
+
+  function usesPublicJitsi() {
+    try {
+      return new URL(config.jitsiBase).host === "meet.jit.si";
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function renderJitsiAuth() {
+    el("jitsi-auth").hidden = !usesPublicJitsi();
+    el("jitsi-auth-text").textContent = jitsiSignedIn
+      ? "Signed in. Your calls start without waiting for a host."
+      : "Sign in so your calls can start. Otherwise they wait for someone signed in to join.";
+    const button = el("jitsi-auth-btn");
+    button.textContent = jitsiSignedIn ? "Sign out" : "Sign in to meet.jit.si";
+    button.classList.toggle("secondary", jitsiSignedIn);
+  }
+
+  el("jitsi-auth-btn").addEventListener("click", async () => {
+    try {
+      await invoke(jitsiSignedIn ? "jitsi_sign_out" : "jitsi_sign_in");
+    } catch (err) {
+      setStatus(`meet.jit.si sign-in failed: ${err}`, "offline");
+    }
+  });
+
+  listen("jitsi-auth-changed", (event) => {
+    jitsiSignedIn = event.payload === true;
+    renderJitsiAuth();
+  });
 
   // ---- Incoming calls -------------------------------------------------------
 
@@ -178,6 +220,7 @@
   function enterDashboard() {
     el("me-username").textContent = config.username;
     showScreen("dashboard");
+    renderJitsiAuth();
     startBackgroundLoops();
   }
 
@@ -223,7 +266,11 @@
     const invite = inviteQueue.shift();
     showNextInvite();
     if (invite) {
-      await invoke("open_meeting", { jitsiBase: config.jitsiBase, room: invite.meetingId });
+      await invoke("open_meeting", {
+        jitsiBase: config.jitsiBase,
+        room: invite.meetingId,
+        displayName: config.username,
+      });
     }
   });
 
@@ -236,6 +283,7 @@
 
   (async function init() {
     await loadConfig();
+    jitsiSignedIn = await invoke("jitsi_signed_in");
     if (config.username) {
       enterDashboard();
     } else {
