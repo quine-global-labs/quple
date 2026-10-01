@@ -1,0 +1,7 @@
+Vendored so the frontend needs no build step (resolved via the import map in index.html).
+
+  preact 11.0.0  dist/preact.mjs       -> preact.js
+  preact 11.0.0  hooks/dist/hooks.mjs  -> preact-hooks.js
+  htm 3.1.1      dist/htm.module.js    -> htm.js
+
+To update: npm pack preact@<version> htm@<version> and copy those files over.

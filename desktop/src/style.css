@@ -274,6 +274,27 @@ header {
   background: var(--success);
 }
 
+.center {
+  text-align: center;
+}
+
+.error {
+  color: var(--danger);
+  font-size: 13px;
+  margin: 10px 0 0;
+}
+
+button.link-btn {
+  display: inline;
+  width: auto;
+  margin: 0;
+  padding: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 600;
+}
+
 [hidden] {
   display: none !important;
 }

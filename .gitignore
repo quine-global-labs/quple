@@ -12,3 +12,7 @@
 
 # Misc
 .DS_Store
+
+# Identity server data: signing key, accounts, refresh tokens
+/identity/data/
+/identity/quine-identity

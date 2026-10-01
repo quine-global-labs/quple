@@ -23,16 +23,16 @@ func main() {
 	}
 
 	// ISSUER is the Quine identity server whose access tokens are accepted;
-	// AUDIENCE is the client ID they must have been issued to.
+	// CLIENT_ID is the app they must have been issued to.
 	issuer := os.Getenv("ISSUER")
 	if issuer == "" {
 		issuer = "https://identity.quineglobal.com"
 	}
-	audience := os.Getenv("AUDIENCE")
-	if audience == "" {
-		audience = "quple"
+	clientID := os.Getenv("CLIENT_ID")
+	if clientID == "" {
+		clientID = "quple"
 	}
-	verifier := NewVerifier(issuer, audience)
+	verifier := NewVerifier(issuer, clientID)
 
 	store := NewStore()
 

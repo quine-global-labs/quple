@@ -9,8 +9,13 @@ other and agree on a meeting room.
 
 ## How it works
 
-1. **Setup.** Each person picks a username on first launch. No password, no
-   account — the username *is* the address people call you at.
+1. **Sign in.** Everything is behind a Quine account
+   (`identity.quineglobal.com`, an OpenID Connect provider in `identity/`).
+   The app opens the sign-in page in the system browser; your Quine username
+   is the address people call you at. Then, when calls run on the public
+   `meet.jit.si`, the app asks you to sign in there once too (meet.jit.si only
+   starts a meeting when a signed-in user joins), and every meeting reuses
+   that session.
 2. **Presence.** While the app is open, it polls the signaling server every
    few seconds, which doubles as "I'm online" and "did anyone call me?".
 3. **Calling.** You call someone by username. The app asks the signaling
@@ -22,15 +27,18 @@ other and agree on a meeting room.
    takes it from there; Quple's server never touches media or call content,
    it only introduces two clients to the same room name.
 
+Every request to the signaling server carries a Quine access token; the
+server takes the caller's username from it, never from the request.
+
 ```
    Caller's Quple                Signaling server              Callee's Quple
    --------------                ----------------              --------------
-   POST /call {from,to}  ----->  mint meetingId,          
+   POST /call {to}       ----->  mint meetingId,          
                                  queue invite for "to"
                          <-----  {meetingId}
    open window:
    jitsi.example/<id>
-                                                            GET /poll?username=me
+                                                            GET /poll
                                                      <----- (polling every ~3s)
                                  return queued invite ----->
                                                             show "Incoming call"
@@ -46,8 +54,11 @@ room — the same as if they'd both manually opened
 
 ```
 quple/
+├── identity/     # Go: Quine sign-in (identity.quineglobal.com) - an OIDC
+│                 # provider on zitadel/oidc, with GitHub/Google via goth
 ├── server/       # Go: the minimal central signaling service
-├── desktop/      # Tauri desktop app (the thing each user runs)
+├── desktop/      # Tauri desktop app (the thing each user runs); the UI is
+│                 # Preact + htm, vendored, so there's no frontend build
 └── jitsi-meet/   # Vendored upstream jitsi-meet source (reference / future
                   # self-hosting; not built as part of this app — see below)
 ```
@@ -67,26 +78,68 @@ one running.
 
 ## Running it
 
-### 1. Signaling server
+Requires Go 1.25+.
+
+### 1. Identity server (Quine sign-in)
+
+```sh
+cd identity
+go run .              # serves issuer https://identity.quineglobal.com on :8081
+```
+
+Environment: `ISSUER` (the public base URL, exactly as clients see it),
+`ADDR`, `DATA_DIR` (default `./data`: the signing key, `accounts.json`, and
+hashed refresh tokens - back it up and keep it private).
+`GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET` and
+`GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` turn on "Continue with GitHub/Google";
+register `$ISSUER/login/github/callback` and `$ISSUER/login/google/callback` as
+the OAuth apps' callback URLs.
+
+Accounts are invite-only, managed with the same binary (it re-reads
+`accounts.json`, so this works while the server runs):
+
+```sh
+go run . adduser alice               # prompts for a password (empty = social sign-in only)
+go run . link alice github octocat   # this GitHub user may sign in as alice
+go run . link alice google a@b.com   # this (verified) Google address may sign in as alice
+go run . list
+go run . passwd alice / unlink alice github / deluser alice
+```
+
+A social link is pinned to the provider's stable user ID on first use, so a
+later rename or recycled login can't take the account over. Deleting an
+account signs it out everywhere within an hour (refresh is refused).
+
+It runs behind TLS termination in production; plain `http://` issuers are
+allowed for local testing only.
+
+### 2. Signaling server
 
 ```sh
 cd server
-go run .              # listens on :8080 by default; set ADDR to change it
+go run .              # listens on :8080; set ADDR to change it
 ```
 
-Quick smoke test:
-
-```sh
-curl -X POST localhost:8080/register -d '{"username":"alice"}'
-curl -X POST localhost:8080/call -d '{"from":"alice","to":"bob"}'
-curl 'localhost:8080/poll?username=bob'
-```
+`ISSUER` (default `https://identity.quineglobal.com`) is the identity server
+whose access tokens it accepts and `CLIENT_ID` (default `quple`) the app they
+must be issued to. Every endpoint needs `Authorization: Bearer <access token>`.
 
 Deploy this wherever `meet.quineglobal.com` (or whatever host name you pick)
 resolves to — it's stateless-enough to run as a single small process; restart
 just clears presence and any in-flight invites.
 
-### 2. Desktop app
+### Local end-to-end setup
+
+```sh
+(cd identity && ISSUER=http://127.0.0.1:8081 ADDR=127.0.0.1:8081 go run . &)
+(cd server && ISSUER=http://127.0.0.1:8081 ADDR=127.0.0.1:8090 go run . &)
+(cd identity && go run . adduser alice)
+```
+
+Then in the app's **Advanced settings** set the identity server to
+`http://127.0.0.1:8081` and the signaling server to `http://127.0.0.1:8090`.
+
+### 3. Desktop app
 
 Requires a Rust toolchain (pinned via `desktop/rust-toolchain.toml`,
 installed automatically by `rustup`) and, on Linux, the system WebView
@@ -103,11 +156,12 @@ cd desktop/src-tauri
 cargo run
 ```
 
-On first launch you'll land on the setup screen — pick a username, and
-optionally adjust the signaling server / Jitsi server URLs (defaults are
-`https://meet.quineglobal.com` and `https://meet.jit.si`; for local testing
-against the server you just started, set the signaling server URL to
-`http://localhost:8080`). Both are editable later from the gear icon.
+On first launch you'll land on **Sign in with Quine**, which finishes in your
+browser and comes back to the app (RFC 8252: a one-shot listener on
+`127.0.0.1`). The refresh token is kept in the app's data dir, readable only
+by you; the webview only ever sees short-lived access tokens. Server URLs
+(identity, signaling, Jitsi) are under **Advanced settings**, and later the
+gear icon.
 
 To build a standalone app bundle:
 
@@ -118,46 +172,34 @@ cargo tauri build
 
 ## Verification status
 
-- **`server/`**: built, `go vet`-clean, has unit tests covering call/drain/
-  presence (`go test ./...`), and was manually exercised end-to-end with
-  `curl` — register two users, place a call, confirm the invite is delivered
-  exactly once on poll, confirm CORS preflight and validation errors work.
-  Fully verified.
-- **`desktop/`**: hand-reviewed against the working quintodrome reference and
-  the actual `tauri` 2.12 crate source (confirmed permission identifiers like
-  `core:window:default` are real, confirmed the JS `invoke()` argument-name
-  casing matches the Rust command signatures). This caught one real bug,
-  since fixed: `#[derive(Default)]` on `AppConfig` doesn't honor
-  `#[serde(default = "...")]`, which only applies to deserialization — so
-  `AppConfig::default()` needed a hand-written impl to actually return
-  `https://meet.quineglobal.com` / `https://meet.jit.si` instead of empty
-  strings.
-
-  `cargo check` was **not** able to fully compile on the machine this was
-  built on: it's an immutable/atomic Linux distro without the
-  `webkit2gtk-4.1`/`glib-2.0`/`gtk3` dev headers Tauri's Linux backend needs,
-  and installing them wasn't possible in the environment available at the
-  time. `cargo check` did get far enough to resolve the full dependency graph
-  and download every crate, failing only once it reached compiling
-  `glib-sys`'s native bindings — i.e. `Cargo.toml`/`Cargo.lock` are known
-  good, but `lib.rs` itself has not been type-checked by `rustc`.
-
-  Before relying on this, build it for real on a machine with Tauri's
-  [Linux prerequisites](https://v2.tauri.app/start/prerequisites/) installed
-  (or macOS/Windows, which need no extra system packages) and run
-  `cargo run` / `cargo tauri build`.
+- **`identity/`**: `go vet`-clean, with end-to-end tests over real HTTP
+  (`go test ./...`): password sign-in through the zitadel provider, PKCE and
+  single-use codes, refresh-token rotation and revocation, refusal after an
+  account is deleted, unregistered redirect URIs refused, social links pinned
+  to the provider's user ID, and tokens verified with `coreos/go-oidc` the
+  way the signaling server does it. The GitHub/Google round trip itself
+  (goth) has **not** been exercised: it needs real OAuth app credentials.
+- **`server/`**: `go vet`-clean with unit tests for call/drain/presence, and
+  exercised end-to-end against a local identity server: no token, garbage
+  tokens and ID tokens are refused; a `from` in the body is ignored in favour
+  of the token's user; refreshed access tokens work, and refresh tokens
+  survive an identity-server restart.
+- **`desktop/`**: builds with `cargo build` on macOS and runs. The Preact UI's
+  gating (Quine sign-in, then meet.jit.si, then dashboard; sign-out; lapsed
+  sessions) is checked headlessly against a mocked backend. The browser
+  sign-in round trip in the real app hasn't been driven automatically.
 
 ## Server API
 
-No auth, by design — usernames are the entire trust model, matching "I have
-your username, so I can call you."
+All endpoints require `Authorization: Bearer <Quine access token>`; the
+caller's username is the token's subject.
 
-| Method & path              | Body / query                  | Returns                                  |
-|-----------------------------|--------------------------------|-------------------------------------------|
-| `POST /register`            | `{"username":"alice"}`        | `{"ok":true}` — marks you online          |
-| `GET /users`                 | —                              | `{"users":["alice","bob"]}` — online now  |
-| `POST /call`                 | `{"from":"alice","to":"bob"}` | `{"meetingId":"quple-ab12cd34"}`          |
-| `GET /poll?username=bob`     | —                              | `{"invites":[{"from":"alice","meetingId":"quple-ab12cd34","createdAt":"..."}]}` — also marks `bob` online, and clears delivered invites |
+| Method & path     | Body           | Returns                                   |
+|--------------------|----------------|--------------------------------------------|
+| `POST /register`   | —              | `{"ok":true}` — marks you online           |
+| `GET /users`       | —              | `{"users":["alice","bob"]}` — online now   |
+| `POST /call`       | `{"to":"bob"}` | `{"meetingId":"quple-ab12cd34"}`           |
+| `GET /poll`        | —              | `{"invites":[{"from":"alice","meetingId":"quple-ab12cd34","createdAt":"..."}]}` — also marks you online, and clears delivered invites |
 
 Presence expires 90s after the last `/register` or `/poll`. Undelivered
 invites expire after 2 minutes.

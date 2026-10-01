@@ -1,184 +1,89 @@
 package main
 
 import (
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/json"
+	"context"
 	"errors"
-	"fmt"
-	"math/big"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/coreos/go-oidc/v3/oidc"
 )
 
-// Verifier checks Quine access tokens (ES256 JWTs from identity.quineglobal.com)
-// locally, using the issuer's published JWKS. Keys are fetched on first use
-// and re-fetched when a token names a key we haven't seen, so key rotation
-// on the identity side needs no restart here.
+// Verifier checks Quine access tokens (JWTs from identity.quineglobal.com)
+// locally with go-oidc. The issuer's discovery document and keys are fetched
+// on first use rather than at startup, so this server can come up even while
+// the identity server is down; go-oidc re-fetches keys when they rotate.
 type Verifier struct {
 	issuer   string
-	audience string
-	client   *http.Client
+	clientID string
 
-	mu        sync.Mutex
-	keys      map[string]*ecdsa.PublicKey
-	lastFetch time.Time
+	mu       sync.Mutex
+	verifier *oidc.IDTokenVerifier
+	lastTry  time.Time
 }
 
-// jwksRefetchInterval bounds how often an unknown key ID can trigger a
-// fetch, so garbage tokens can't be used to hammer the identity server.
-const jwksRefetchInterval = time.Minute
+// discoveryRetryInterval bounds how often a failed discovery is retried, so
+// a down identity server isn't hammered by every poll.
+const discoveryRetryInterval = 10 * time.Second
 
-func NewVerifier(issuer, audience string) *Verifier {
-	return &Verifier{
-		issuer:   strings.TrimRight(issuer, "/"),
-		audience: audience,
-		client:   &http.Client{Timeout: 10 * time.Second},
-		keys:     map[string]*ecdsa.PublicKey{},
-	}
+var errIdentityUnavailable = errors.New("identity server unavailable")
+
+func NewVerifier(issuer, clientID string) *Verifier {
+	return &Verifier{issuer: strings.TrimRight(issuer, "/"), clientID: clientID}
 }
 
-var b64 = base64.RawURLEncoding
-
-// Verify checks token and returns the username it was issued to.
-func (v *Verifier) Verify(token string) (string, error) {
-	parts := strings.Split(token, ".")
-	if len(parts) != 3 {
-		return "", errors.New("malformed token")
-	}
-	var header struct {
-		Alg string `json:"alg"`
-		Typ string `json:"typ"`
-		Kid string `json:"kid"`
-	}
-	if err := decodeSegment(parts[0], &header); err != nil {
-		return "", err
-	}
-	// at+jwt (RFC 9068) marks an access token, so an ID or refresh token
-	// can't be passed off as one.
-	if header.Alg != "ES256" || header.Typ != "at+jwt" {
-		return "", errors.New("not an access token")
-	}
-	key, err := v.key(header.Kid)
-	if err != nil {
-		return "", err
-	}
-	sig, err := b64.DecodeString(parts[2])
-	if err != nil || len(sig) != 64 {
-		return "", errors.New("malformed signature")
-	}
-	digest := sha256.Sum256([]byte(parts[0] + "." + parts[1]))
-	if !ecdsa.Verify(key, digest[:], new(big.Int).SetBytes(sig[:32]), new(big.Int).SetBytes(sig[32:])) {
-		return "", errors.New("bad signature")
-	}
-
-	var claims struct {
-		Iss      string `json:"iss"`
-		Aud      string `json:"aud"`
-		Exp      int64  `json:"exp"`
-		Username string `json:"preferred_username"`
-	}
-	if err := decodeSegment(parts[1], &claims); err != nil {
-		return "", err
-	}
-	switch {
-	case claims.Iss != v.issuer:
-		return "", errors.New("wrong issuer")
-	case claims.Aud != v.audience:
-		return "", errors.New("wrong audience")
-	case time.Now().Unix() >= claims.Exp:
-		return "", errors.New("token expired")
-	case claims.Username == "":
-		return "", errors.New("token has no username")
-	}
-	return claims.Username, nil
-}
-
-func (v *Verifier) key(kid string) (*ecdsa.PublicKey, error) {
+func (v *Verifier) get(ctx context.Context) (*oidc.IDTokenVerifier, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	if k, ok := v.keys[kid]; ok {
-		return k, nil
+	if v.verifier != nil {
+		return v.verifier, nil
 	}
-	if time.Since(v.lastFetch) < jwksRefetchInterval {
-		return nil, errors.New("unknown signing key")
+	if time.Since(v.lastTry) < discoveryRetryInterval {
+		return nil, errIdentityUnavailable
 	}
-	v.lastFetch = time.Now()
-	keys, err := v.fetchKeys()
+	v.lastTry = time.Now()
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	provider, err := oidc.NewProvider(oidc.ClientContext(ctx, http.DefaultClient), v.issuer)
 	if err != nil {
-		return nil, fmt.Errorf("fetching issuer keys: %w", err)
+		return nil, errIdentityUnavailable
 	}
-	v.keys = keys
-	if k, ok := keys[kid]; ok {
-		return k, nil
-	}
-	return nil, errors.New("unknown signing key")
+	// Access tokens are issued with the client ID as their audience, which
+	// go-oidc checks along with issuer, expiry and signature.
+	v.verifier = provider.Verifier(&oidc.Config{ClientID: v.clientID})
+	return v.verifier, nil
 }
 
-// fetchKeys finds the JWKS via OIDC discovery and parses its P-256 keys.
-func (v *Verifier) fetchKeys() (map[string]*ecdsa.PublicKey, error) {
-	var discovery struct {
-		Issuer  string `json:"issuer"`
-		JWKSURI string `json:"jwks_uri"`
-	}
-	if err := v.getJSON(v.issuer+"/.well-known/openid-configuration", &discovery); err != nil {
-		return nil, err
-	}
-	if discovery.Issuer != v.issuer || discovery.JWKSURI == "" {
-		return nil, errors.New("discovery document does not match issuer")
-	}
-	var jwks struct {
-		Keys []struct {
-			Kty, Crv, X, Y, Kid string
-		} `json:"keys"`
-	}
-	if err := v.getJSON(discovery.JWKSURI, &jwks); err != nil {
-		return nil, err
-	}
-	keys := map[string]*ecdsa.PublicKey{}
-	for _, k := range jwks.Keys {
-		if k.Kty != "EC" || k.Crv != "P-256" {
-			continue
-		}
-		x, errX := b64.DecodeString(k.X)
-		y, errY := b64.DecodeString(k.Y)
-		if errX != nil || errY != nil || len(x) != 32 || len(y) != 32 {
-			continue
-		}
-		pub, err := ecdsa.ParseUncompressedPublicKey(elliptic.P256(), append(append([]byte{4}, x...), y...))
-		if err != nil {
-			continue
-		}
-		keys[k.Kid] = pub
-	}
-	return keys, nil
-}
-
-func (v *Verifier) getJSON(url string, out any) error {
-	resp, err := v.client.Get(url)
+// Verify checks an access token and returns the username it was issued to.
+func (v *Verifier) Verify(ctx context.Context, token string) (string, error) {
+	verifier, err := v.get(ctx)
 	if err != nil {
-		return err
+		return "", err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("GET %s: %s", url, resp.Status)
-	}
-	return json.NewDecoder(resp.Body).Decode(out)
-}
-
-func decodeSegment(seg string, v any) error {
-	raw, err := b64.DecodeString(seg)
+	parsed, err := verifier.Verify(ctx, token)
 	if err != nil {
-		return errors.New("malformed token")
+		return "", err
 	}
-	if err := json.Unmarshal(raw, v); err != nil {
-		return errors.New("malformed token")
+	var claims struct {
+		ClientID string `json:"client_id"`
+		JTI      string `json:"jti"`
+		AtHash   string `json:"at_hash"`
+		Nonce    string `json:"nonce"`
 	}
-	return nil
+	if err := parsed.Claims(&claims); err != nil {
+		return "", err
+	}
+	// The identity server (zitadel/oidc) signs ID and access tokens alike -
+	// same audience, same typ header - so tell them apart by shape: access
+	// tokens have a jti and never the ID-token-only at_hash/nonce. This keeps
+	// an ID token from being accepted as an access token.
+	if claims.ClientID != v.clientID || claims.JTI == "" || claims.AtHash != "" || claims.Nonce != "" {
+		return "", errors.New("not an access token for this app")
+	}
+	// The subject is the Quine username.
+	return parsed.Subject, nil
 }
 
 // authedHandler is a handler that knows who's calling.
@@ -195,10 +100,14 @@ func requireAuth(v *Verifier, h authedHandler) http.HandlerFunc {
 			writeError(w, http.StatusUnauthorized, "sign in required")
 			return
 		}
-		username, err := v.Verify(token)
+		username, err := v.Verify(r.Context(), token)
+		if errors.Is(err, errIdentityUnavailable) {
+			writeError(w, http.StatusServiceUnavailable, err.Error())
+			return
+		}
 		if err != nil {
 			w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token"`)
-			writeError(w, http.StatusUnauthorized, err.Error())
+			writeError(w, http.StatusUnauthorized, "invalid or expired token")
 			return
 		}
 		h(w, r, username)

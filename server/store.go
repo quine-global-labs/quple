@@ -26,10 +26,9 @@ const presenceWindow = 90 * time.Second
 // rather than kept forever.
 const inviteTTL = 2 * time.Minute
 
-// Store is a deliberately minimal, in-memory, process-lifetime store. There
-// is no auth, no persistence, and no accounts beyond "a username someone
-// mentioned" - that matches the app's threat model of trusted friends
-// calling each other by username.
+// Store is a deliberately minimal, in-memory, process-lifetime store with no
+// persistence. Accounts live in the Quine identity server; usernames here are
+// whatever verified access tokens said (see auth.go).
 type Store struct {
 	mu       sync.Mutex
 	lastSeen map[string]time.Time

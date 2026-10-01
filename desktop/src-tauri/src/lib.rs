@@ -1,20 +1,23 @@
+mod quine;
+
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::sync::atomic::{AtomicU32, Ordering};
 use tauri::webview::NewWindowResponse;
 use tauri::{Emitter, Manager, Url, WebviewUrl, WebviewWindowBuilder};
 
-/// Everything the app needs to remember between launches: who you are, and
-/// which servers to talk to. Saved as plain JSON in the app's data dir -
-/// there's nothing sensitive in it and nothing worth a database for.
+/// Everything the app needs to remember between launches: which servers to
+/// talk to. Saved as plain JSON in the app's data dir - there's nothing
+/// sensitive in it (the Quine sign-in is kept separately, see quine.rs).
+/// Who you are comes from your Quine account.
 #[derive(Serialize, Deserialize, Clone)]
 struct AppConfig {
-    #[serde(default)]
-    username: String,
     #[serde(default = "default_server_url")]
     server_url: String,
     #[serde(default = "default_jitsi_base")]
     jitsi_base: String,
+    #[serde(default = "default_identity_url")]
+    identity_url: String,
 }
 
 fn default_server_url() -> String {
@@ -25,15 +28,19 @@ fn default_jitsi_base() -> String {
     "https://meet.jit.si".to_string()
 }
 
+fn default_identity_url() -> String {
+    "https://identity.quineglobal.com".to_string()
+}
+
 // `#[serde(default = "...")]` only kicks in during deserialization, so a
-// derived `Default` impl would silently give `server_url`/`jitsi_base` empty
-// strings instead of their real defaults. Implement it by hand to match.
+// derived `Default` impl would silently give these empty strings instead of
+// their real defaults. Implement it by hand to match.
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            username: String::new(),
             server_url: default_server_url(),
             jitsi_base: default_jitsi_base(),
+            identity_url: default_identity_url(),
         }
     }
 }
@@ -297,13 +304,20 @@ fn open_meeting(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .manage(quine::QuineAuth::default())
         .invoke_handler(tauri::generate_handler![
             load_config,
             save_config,
             open_meeting,
             jitsi_signed_in,
             jitsi_sign_in,
-            jitsi_sign_out
+            jitsi_sign_out,
+            quine::quine_sign_in,
+            quine::quine_cancel_sign_in,
+            quine::quine_restore,
+            quine::quine_access_token,
+            quine::quine_sign_out
         ])
         .run(tauri::generate_context!())
         .expect("error while running Quple");
