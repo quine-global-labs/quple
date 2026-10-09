@@ -278,6 +278,47 @@ header {
   text-align: center;
 }
 
+.user-row {
+  gap: 10px;
+}
+
+.user-row .name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.presence {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--border);
+}
+
+.presence.online {
+  background: var(--success);
+}
+
+.user-row button.remove {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--muted);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+button.add-contact {
+  display: block;
+  margin: 12px auto 0;
+}
+
 .error {
   color: var(--danger);
   font-size: 13px;

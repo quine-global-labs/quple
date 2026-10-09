@@ -3,7 +3,6 @@ package main
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"sort"
 	"sync"
 	"time"
 )
@@ -11,8 +10,10 @@ import (
 // Invite is a pending call: someone tried to reach a user who hasn't
 // picked up (polled it) yet.
 type Invite struct {
-	From      string    `json:"from"`
-	MeetingID string    `json:"meetingId"`
+	From      string `json:"from"`
+	MeetingID string `json:"meetingId"`
+	// JitsiURL is the Jitsi Meet server the caller picked for this call.
+	JitsiURL  string    `json:"jitsiUrl"`
 	CreatedAt time.Time `json:"createdAt"`
 }
 
@@ -48,25 +49,17 @@ func (s *Store) Touch(username string) {
 	s.lastSeen[username] = time.Now()
 }
 
-// OnlineUsers returns usernames seen within presenceWindow, sorted.
-func (s *Store) OnlineUsers() []string {
+// IsOnline reports whether username was seen within presenceWindow.
+func (s *Store) IsOnline(username string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	cutoff := time.Now().Add(-presenceWindow)
-	users := make([]string, 0, len(s.lastSeen))
-	for u, t := range s.lastSeen {
-		if t.After(cutoff) {
-			users = append(users, u)
-		}
-	}
-	sort.Strings(users)
-	return users
+	t, ok := s.lastSeen[username]
+	return ok && time.Since(t) < presenceWindow
 }
 
-// PlaceCall records an invite from -> to and returns it, including the
-// freshly minted meeting ID the two sides will rendezvous on.
-func (s *Store) PlaceCall(from, to string) Invite {
-	inv := Invite{From: from, MeetingID: newMeetingID(), CreatedAt: time.Now()}
+// PlaceCall queues inv for to, stamping its creation time.
+func (s *Store) PlaceCall(to string, inv Invite) Invite {
+	inv.CreatedAt = time.Now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.invites[to] = append(s.invites[to], inv)

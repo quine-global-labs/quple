@@ -9,7 +9,8 @@ use tauri::{Emitter, Manager, Url, WebviewUrl, WebviewWindowBuilder};
 /// Everything the app needs to remember between launches: which servers to
 /// talk to. Saved as plain JSON in the app's data dir - there's nothing
 /// sensitive in it (the Quine sign-in is kept separately, see quine.rs).
-/// Who you are comes from your Quine account.
+/// Who you are comes from your Quine account. `jitsi_base` is the Jitsi
+/// Meet server you last called someone on, which the next call starts from.
 #[derive(Serialize, Deserialize, Clone)]
 struct AppConfig {
     #[serde(default = "default_server_url")]
@@ -251,6 +252,12 @@ fn open_meeting(
     if room.is_empty() {
         return Err("room is required".into());
     }
+    // Whoever calls picks the server, so the callee's window must only ever
+    // go to a web page.
+    match Url::parse(jitsi_base.trim()) {
+        Ok(u) if matches!(u.scheme(), "https" | "http") && u.host_str().is_some() => {}
+        _ => return Err(format!("{jitsi_base} isn't a Jitsi Meet server URL")),
+    }
 
     let label = format!("meeting-{room}");
     if let Some(existing) = app.get_webview_window(&label) {
@@ -278,7 +285,7 @@ fn open_meeting(
              &config.prejoinConfig.enabled=false&config.prejoinPageEnabled=false",
             percent_encode(&name_json)
         );
-        Url::parse(&url).map_err(|e| format!("invalid meeting URL {url}: {e}"))?
+        Url::parse(&url).map_err(|_| format!("invalid meeting URL for {base}/{room}"))?
     };
 
     let app_ = app.clone();

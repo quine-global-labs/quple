@@ -85,31 +85,3 @@ func (v *Verifier) Verify(ctx context.Context, token string) (string, error) {
 	// The subject is the Quine username.
 	return parsed.Subject, nil
 }
-
-// authedHandler is a handler that knows who's calling.
-type authedHandler func(w http.ResponseWriter, r *http.Request, username string)
-
-// requireAuth rejects requests without a valid Quine access token and passes
-// the token's username to h. Usernames always come from the token, never
-// from the request, so nobody can act as someone else.
-func requireAuth(v *Verifier, h authedHandler) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if !ok {
-			w.Header().Set("WWW-Authenticate", "Bearer")
-			writeError(w, http.StatusUnauthorized, "sign in required")
-			return
-		}
-		username, err := v.Verify(r.Context(), token)
-		if errors.Is(err, errIdentityUnavailable) {
-			writeError(w, http.StatusServiceUnavailable, err.Error())
-			return
-		}
-		if err != nil {
-			w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token"`)
-			writeError(w, http.StatusUnauthorized, "invalid or expired token")
-			return
-		}
-		h(w, r, username)
-	}
-}

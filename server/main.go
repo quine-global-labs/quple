@@ -1,50 +1,67 @@
-// Command quple-server is the minimal central rendezvous service for Quple.
+// Command quple-server is the central rendezvous service for Quple
+// (meet.quineglobal.com).
 //
-// It does barely more than the job requires: signed-in clients announce
-// themselves, look up who else is online, place a call (which mints a meeting
-// ID), and poll for calls placed to them. Every request carries a Quine access
-// token (from identity.quineglobal.com), which is where the caller's username
-// comes from. Nothing here is a source of truth
-// beyond "who has said hello recently" and "what calls are outstanding" -
-// the actual meeting (media, chat, etc.) happens entirely inside Jitsi Meet,
-// which this server never talks to.
+// Everyone signs in with Quine (identity.quineglobal.com), the one identity
+// server, and is known by their Quine username. Signed-in clients announce
+// themselves, keep a contact list, place calls, and poll for calls placed to
+// them. A call names the Jitsi Meet server it happens on - any one, picked by
+// the caller - and this server just tells the callee where to go. The meeting
+// itself (media, chat, etc.) happens entirely inside Jitsi Meet, which this
+// server never talks to.
+//
+// Configuration (environment):
+//
+//	ADDR           listen address (default :8080)
+//	ISSUER         Quine identity server whose access tokens are accepted
+//	               (default https://identity.quineglobal.com)
+//	CLIENT_ID      app the tokens must be issued to (default quple)
+//	DEFAULT_JITSI  Jitsi Meet server for calls that don't name one (default https://meet.jit.si)
+//	DATA_DIR       contacts (default ./data)
 package main
 
 import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 )
 
 func main() {
-	addr := os.Getenv("ADDR")
-	if addr == "" {
-		addr = ":8080"
+	addr := envOr("ADDR", ":8080")
+	issuer := envOr("ISSUER", "https://identity.quineglobal.com")
+	dataDir := envOr("DATA_DIR", "data")
+	defaultJitsi, err := normalizeJitsiURL(envOr("DEFAULT_JITSI", "https://meet.jit.si"))
+	if err != nil {
+		log.Fatalf("DEFAULT_JITSI: %v", err)
 	}
 
-	// ISSUER is the Quine identity server whose access tokens are accepted;
-	// CLIENT_ID is the app they must have been issued to.
-	issuer := os.Getenv("ISSUER")
-	if issuer == "" {
-		issuer = "https://identity.quineglobal.com"
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		log.Fatal(err)
 	}
-	clientID := os.Getenv("CLIENT_ID")
-	if clientID == "" {
-		clientID = "quple"
+	contacts, err := LoadContacts(filepath.Join(dataDir, "contacts.json"))
+	if err != nil {
+		log.Fatal(err)
 	}
-	verifier := NewVerifier(issuer, clientID)
 
-	store := NewStore()
-
+	app := &App{
+		verifier:        NewVerifier(issuer, envOr("CLIENT_ID", "quple")),
+		store:           NewStore(),
+		contacts:        contacts,
+		defaultJitsiURL: defaultJitsi,
+	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("/register", withCORS(requireAuth(verifier, store.handleRegister)))
-	mux.HandleFunc("/users", withCORS(requireAuth(verifier, store.handleUsers)))
-	mux.HandleFunc("/call", withCORS(requireAuth(verifier, store.handleCall)))
-	mux.HandleFunc("/poll", withCORS(requireAuth(verifier, store.handlePoll)))
+	app.Routes(mux)
 	mux.HandleFunc("/healthz", withCORS(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("ok"))
 	}))
 
-	log.Printf("quple-server listening on %s, accepting tokens from %s", addr, issuer)
+	log.Printf("quple-server listening on %s, accepting tokens from %s, default Jitsi %s", addr, issuer, defaultJitsi)
 	log.Fatal(http.ListenAndServe(addr, mux))
+}
+
+func envOr(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
 }
