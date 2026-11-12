@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/coreos/go-oidc/v3 v3.21.0
-	github.com/go-jose/go-jose/v4 v4.1.4
+	github.com/go-jose/go-jose/v4 v4.1.9
 	github.com/markbates/goth v1.82.0
 	github.com/zitadel/oidc/v3 v3.51.8
 	golang.org/x/text v0.41.0
